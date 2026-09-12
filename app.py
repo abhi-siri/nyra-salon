@@ -43,13 +43,6 @@ st.markdown("""
         text-align: center;
         margin-bottom: 1.5rem;
     }
-    .metric-card {
-        background-color: #1e222d;
-        border-left: 5px solid #D4AF37;
-        padding: 15px;
-        border-radius: 8px;
-        color: white;
-    }
     .stButton>button {
         border-radius: 6px;
     }
@@ -100,9 +93,8 @@ st.markdown("<div class='sub-header'>Daily Entry • Service Tracker • Price &
 # TAB 1: DAILY ENTRY
 # ==============================================================================
 if nav_choice == "📝 Daily Entry":
-    st.subheader("📝 Record Service Work & Money Received in 'Daily Entry'")
+    st.subheader("📝 Record Service Work & Money Received in 'Daily Entry' Sheet")
     
-    # Session state for items cart in current ticket
     if 'cart_items' not in st.session_state:
         st.session_state.cart_items = []
 
@@ -120,7 +112,6 @@ if nav_choice == "📝 Daily Entry":
         
         cat_services = menu_df[menu_df['Category'] == selected_category]
         
-        # Format service dropdown list with Variant and Price
         service_options = []
         for idx, row in cat_services.iterrows():
             variant_str = f" ({row['Variant']})" if pd.notnull(row['Variant']) and str(row['Variant']).strip() != '' else ""
@@ -132,19 +123,24 @@ if nav_choice == "📝 Daily Entry":
         
         qty = st.number_input("Quantity", min_value=1, max_value=20, value=1)
         
-        if st.button("➕ Add Service to Entry", use_container_width=True):
+        if st.button("➕ Add Service to Ticket", use_container_width=True):
             item_name = selected_service_row['Service']
             variant = selected_service_row['Variant']
             price = selected_service_row['Selling Price (Rs.)']
-            
+            cost = selected_service_row.get('Cost per Service (Rs.)', 0.0)
+            if pd.isnull(cost):
+                cost = 0.0
+                
             full_item_desc = f"{item_name}{' (' + str(variant) + ')' if variant else ''}"
             
             st.session_state.cart_items.append({
                 'category': selected_category,
                 'item_desc': full_item_desc,
                 'price': price,
+                'cost': cost,
                 'qty': qty,
-                'subtotal': price * qty
+                'subtotal': price * qty,
+                'subtotal_cost': cost * qty
             })
             st.success(f"Added {full_item_desc} (x{qty}) to ticket!")
 
@@ -162,7 +158,9 @@ if nav_choice == "📝 Daily Entry":
             )
             
             calculated_total = float(cart_df['subtotal'].sum())
+            calculated_cost = float(cart_df['subtotal_cost'].sum())
             items_str = ", ".join([f"{item['item_desc']} x{item['qty']}" for item in st.session_state.cart_items])
+            cats_str = ", ".join(list(set([item['category'] for item in st.session_state.cart_items])))
             
             col_clear, col_space = st.columns([1, 2])
             with col_clear:
@@ -171,42 +169,49 @@ if nav_choice == "📝 Daily Entry":
                     st.rerun()
         else:
             calculated_total = 0.0
+            calculated_cost = 0.0
             items_str = ""
+            cats_str = ""
             st.info("No menu items added yet. You can pick services on the left or enter custom work below.")
             custom_items = st.text_area("Custom Work / Items Description", placeholder="e.g. Threading, Hair Cut, Facial")
             if custom_items.strip():
                 items_str = custom_items.strip()
                 
         final_money_received = st.number_input("Money Received (₹)", value=calculated_total, step=10.0)
+        entry_notes = st.text_input("Customer Name / Notes (Optional)", placeholder="e.g. Client Name, Discount info")
         
         st.markdown("---")
-        if st.button("✅ Save to 'Daily entry' Sheet", type="primary", use_container_width=True):
+        if st.button("✅ Save to 'Daily Entry' Sheet", type="primary", use_container_width=True):
             if final_money_received <= 0:
                 st.warning("Please enter a valid Money Received amount.")
             else:
+                profit_calc = final_money_received - calculated_cost
                 add_earning_entry(
                     date_str=entry_date.strftime('%Y-%m-%d'),
                     items_str=items_str,
                     money_received=final_money_received,
-                    payment_mode=payment_mode
+                    payment_mode=payment_mode,
+                    category=cats_str,
+                    cost=calculated_cost,
+                    profit=profit_calc,
+                    notes=entry_notes
                 )
                 st.session_state.cart_items = []
                 st.balloons()
-                st.success(f"Successfully saved entry into 'Daily entry' sheet: ₹{final_money_received:.2f} ({payment_mode}) for {entry_date.strftime('%d-%b-%Y')}!")
+                st.success(f"Successfully saved entry into 'Daily Entry' sheet: ₹{final_money_received:.2f} ({payment_mode}) for {entry_date.strftime('%d-%b-%Y')}!")
 
 
 # ==============================================================================
 # TAB 2: DAILY ENTRY LEDGER & ANALYTICS
 # ==============================================================================
 elif nav_choice == "📊 Daily Entry Ledger & Analytics":
-    st.subheader("📊 'Daily entry' Sheet Records & Financial Analytics")
+    st.subheader("📊 'Daily Entry' Sheet Ledger & Financial Analytics")
     
     df_earnings = get_earnings_df()
     
     if df_earnings.empty:
         st.info("No daily entries recorded yet.")
     else:
-        # Date Filter
         df_earnings['Date_Parsed'] = pd.to_datetime(df_earnings['Date'], errors='coerce')
         min_date = df_earnings['Date_Parsed'].min().date() if pd.notnull(df_earnings['Date_Parsed'].min()) else date.today()
         max_date = df_earnings['Date_Parsed'].max().date() if pd.notnull(df_earnings['Date_Parsed'].max()) else date.today()
@@ -229,35 +234,35 @@ elif nav_choice == "📊 Daily Entry Ledger & Analytics":
         st.markdown("---")
         
         # KPI Summary Cards
-        total_rev = filtered_df['Money Received'].sum()
+        total_rev = filtered_df['Money Received (Rs.)'].sum()
         total_count = len(filtered_df)
         avg_ticket = total_rev / total_count if total_count > 0 else 0
+        total_profit = filtered_df['Profit (Rs.)'].sum()
         
-        upi_rev = filtered_df[filtered_df['Payment Mode'] == 'UPI']['Money Received'].sum()
-        cash_rev = filtered_df[filtered_df['Payment Mode'] == 'Cash']['Money Received'].sum()
-        online_rev = filtered_df[filtered_df['Payment Mode'].isin(['Online', 'Card', 'Mixed'])]['Money Received'].sum()
+        upi_rev = filtered_df[filtered_df['Payment Mode'] == 'UPI']['Money Received (Rs.)'].sum()
+        cash_rev = filtered_df[filtered_df['Payment Mode'] == 'Cash']['Money Received (Rs.)'].sum()
+        online_rev = filtered_df[filtered_df['Payment Mode'].isin(['Online', 'Card', 'Mixed'])]['Money Received (Rs.)'].sum()
         
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Total Revenue", f"₹{total_rev:,.0f}")
-        m2.metric("UPI Earnings", f"₹{upi_rev:,.0f}")
-        m3.metric("Cash Earnings", f"₹{cash_rev:,.0f}")
-        m4.metric("Online/Other", f"₹{online_rev:,.0f}")
+        m2.metric("Total Profit", f"₹{total_profit:,.0f}")
+        m3.metric("UPI Earnings", f"₹{upi_rev:,.0f}")
+        m4.metric("Cash Earnings", f"₹{cash_rev:,.0f}")
         m5.metric("Avg Ticket", f"₹{avg_ticket:,.0f}")
         
         st.markdown("---")
         
-        # Charts Section
         chart_col1, chart_col2 = st.columns(2)
         
         with chart_col1:
             st.markdown("##### Daily Revenue Trend")
-            daily_grp = filtered_df.groupby('Date')['Money Received'].sum().reset_index()
+            daily_grp = filtered_df.groupby('Date')['Money Received (Rs.)'].sum().reset_index()
             daily_grp = daily_grp.sort_values('Date')
             
             fig_line = px.line(
                 daily_grp,
                 x='Date',
-                y='Money Received',
+                y='Money Received (Rs.)',
                 markers=True,
                 line_shape='spline',
                 title="Daily Revenue Trend (₹)"
@@ -268,12 +273,12 @@ elif nav_choice == "📊 Daily Entry Ledger & Analytics":
             
         with chart_col2:
             st.markdown("##### Revenue Breakdown by Payment Mode")
-            mode_grp = filtered_df.groupby('Payment Mode')['Money Received'].sum().reset_index()
+            mode_grp = filtered_df.groupby('Payment Mode')['Money Received (Rs.)'].sum().reset_index()
             
             fig_pie = px.pie(
                 mode_grp,
                 names='Payment Mode',
-                values='Money Received',
+                values='Money Received (Rs.)',
                 hole=0.4,
                 title="Payment Method Share",
                 color_discrete_sequence=px.colors.qualitative.Gold
@@ -281,17 +286,17 @@ elif nav_choice == "📊 Daily Entry Ledger & Analytics":
             fig_pie.update_layout(template="plotly_dark")
             st.plotly_chart(fig_pie, use_container_width=True)
             
-        # Detailed Records Table (Exact layout of 'Daily entry' sheet)
+        # Detailed Records Table (Exact layout of 'Daily Entry' sheet)
         st.markdown("---")
-        st.markdown("### 📜 'Daily entry' Sheet Table")
+        st.markdown(f"### 📜 'Daily Entry' Sheet Table ({len(filtered_df)} Rows)")
         
+        disp_cols = ['S.No', 'Date', 'Items/Services', 'Category', 'Money Received (Rs.)', 'Cost (Rs.)', 'Profit (Rs.)', 'Payment Mode', 'Notes', 'Created At']
         st.dataframe(
-            filtered_df[['S.No', 'Date', 'Items', 'Money Received', 'Payment Mode', 'Created At']],
+            filtered_df[disp_cols],
             use_container_width=True,
             hide_index=True
         )
         
-        # Delete entry tool
         with st.expander("🗑️ Manage / Delete an Entry"):
             del_id = st.number_input("Enter ID of entry to delete", min_value=1, step=1)
             if st.button("Delete Entry"):
@@ -325,7 +330,6 @@ elif nav_choice == "📋 Menu Catalog & Pricing":
         
     st.markdown(f"**Showing {len(filtered_menu)} services**")
     
-    # Format Table Display
     display_df = filtered_menu[['Category', 'Service', 'Variant', 'Selling Price (Rs.)', 'Cost per Service (Rs.)', 'Profit (Rs.)', 'Margin %', 'Notes']].copy()
     display_df['Margin %'] = (display_df['Margin %'] * 100).round(1).astype(str) + '%'
     
@@ -335,7 +339,6 @@ elif nav_choice == "📋 Menu Catalog & Pricing":
         hide_index=True
     )
     
-    # Quick Quote / Bill Calculator Tool
     st.markdown("---")
     st.markdown("### 🧮 Quick Price Estimator / Quote Builder")
     calc_services = st.multiselect(
@@ -405,14 +408,14 @@ elif nav_choice == "☁️ Google Drive & Excel Sync":
     """)
     
     st.markdown("---")
-    st.markdown("### 🔄 Sync Options")
+    st.markdown("### 🔄 Sync & Cloud Transfer Options")
     
     col_sync1, col_sync2 = st.columns(2)
     
     with col_sync1:
-        st.markdown("#### 1. Fetch Live Data from Google Drive")
-        st.caption("Pull live spreadsheet sheets from your Google Drive link into the app.")
-        if st.button("📥 Fetch Live Google Sheet Data", use_container_width=True):
+        st.markdown("#### 1. Fetch Data from Google Drive Link")
+        st.caption("Inspect live sheets from your Google Drive link.")
+        if st.button("📥 Fetch Google Drive Sheet Data", use_container_width=True):
             with st.spinner("Downloading spreadsheet from Google Drive..."):
                 g_data = fetch_from_google_drive()
                 if g_data:
@@ -424,7 +427,7 @@ elif nav_choice == "☁️ Google Drive & Excel Sync":
                     
     with col_sync2:
         st.markdown("#### 2. Export App Data to Excel Workbook")
-        st.caption("Generate a 5-sheet `.xlsx` file containing all Price Lists, Margins, Daily Entry sheet, Category Summaries, and Inventory.")
+        st.caption("Generate a complete 5-sheet `.xlsx` file containing all your Daily Entry logs, Price Lists, Margins, Category Summaries, and Inventory.")
         st.download_button(
             label="📤 Download Updated Salon Excel (.xlsx)",
             data=excel_data,
