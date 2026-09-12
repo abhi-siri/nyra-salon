@@ -286,7 +286,6 @@ elif nav_choice == "📊 Daily Entry Ledger & Analytics":
             fig_pie.update_layout(template="plotly_dark")
             st.plotly_chart(fig_pie, use_container_width=True)
             
-        # Detailed Records Table (Exact layout of 'Daily Entry' sheet)
         st.markdown("---")
         st.markdown(f"### 📜 'Daily Entry' Sheet Table ({len(filtered_df)} Rows)")
         
@@ -426,8 +425,8 @@ elif nav_choice == "☁️ Google Drive & Excel Sync":
                     st.error("Failed to fetch live spreadsheet. Please ensure link permissions are set to 'Anyone with link can view'.")
                     
     with col_sync2:
-        st.markdown("#### 2. Export App Data to Excel Workbook")
-        st.caption("Generate a complete 5-sheet `.xlsx` file containing all your Daily Entry logs, Price Lists, Margins, Category Summaries, and Inventory.")
+        st.markdown("#### 2. Update Google Drive Excel File")
+        st.caption("Download the updated 5-sheet workbook containing all your Daily Entry records and upload it to Google Drive.")
         st.download_button(
             label="📤 Download Updated Salon Excel (.xlsx)",
             data=excel_data,
@@ -435,3 +434,4 @@ elif nav_choice == "☁️ Google Drive & Excel Sync":
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
+        st.info("💡 To update your Google Drive file: Download this file, open your Google Drive spreadsheet link above, click **File > Import > Upload**, and choose **Replace spreadsheet**.")

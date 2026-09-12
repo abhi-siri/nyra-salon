@@ -145,7 +145,7 @@ def load_menu_list():
     return df
 
 def fetch_from_google_drive():
-    """Fetch live data from Google Drive link export."""
+    """Fetch live data from Google Drive link export and automatically fallback 'Daily Entry' if 0 rows."""
     try:
         res = requests.get(GOOGLE_DRIVE_EXPORT_URL, timeout=10)
         if res.status_code == 200:
@@ -154,6 +154,17 @@ def fetch_from_google_drive():
             data_dict = {}
             for sheet in xls.sheet_names:
                 data_dict[sheet] = pd.read_excel(bytes_data, sheet_name=sheet)
+                
+            # If 'Daily Entry' or 'Daily entry' is empty (0 rows), fallback to 'Earnings' sheet data!
+            for entry_name in ['Daily Entry', 'Daily entry']:
+                if entry_name in data_dict:
+                    if data_dict[entry_name].empty and 'Earnings' in data_dict and not data_dict['Earnings'].empty:
+                        data_dict[entry_name] = data_dict['Earnings'].copy()
+                        
+            # Ensure 'Daily Entry' exists in data_dict
+            if 'Daily Entry' not in data_dict and 'Earnings' in data_dict:
+                data_dict['Daily Entry'] = data_dict['Earnings'].copy()
+                
             return data_dict
         else:
             print(f"Failed to fetch from Google Drive: {res.status_code}")
@@ -196,7 +207,7 @@ def add_earning_entry(date_str, items_str, money_received, payment_mode, categor
     conn.commit()
     conn.close()
     
-    # Optional Webhook push
+    # Optional Webhook push to Google Sheet
     if webhook_url and webhook_url.strip():
         try:
             payload = {
