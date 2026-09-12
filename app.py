@@ -1,0 +1,435 @@
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from datetime import datetime, date
+import os
+
+from data_manager import (
+    GOOGLE_DRIVE_VIEW_URL,
+    load_menu_list,
+    get_earnings_df,
+    add_earning_entry,
+    delete_earning_entry,
+    get_inventory_df,
+    add_inventory_item,
+    fetch_from_google_drive,
+    generate_excel_export,
+    init_db
+)
+
+# Page configuration
+st.set_page_config(
+    page_title="NYRA Unisex Salon - Daily Entry & Earnings",
+    page_icon="✂️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom Styling (Gold & Dark Navy / Salon Luxe Theme)
+st.markdown("""
+<style>
+    .main-header {
+        font-family: 'Helvetica Neue', sans-serif;
+        font-size: 2.3rem;
+        font-weight: 700;
+        color: #D4AF37;
+        text-align: center;
+        margin-bottom: 0.2rem;
+    }
+    .sub-header {
+        font-size: 1.0rem;
+        color: #888;
+        text-align: center;
+        margin-bottom: 1.5rem;
+    }
+    .metric-card {
+        background-color: #1e222d;
+        border-left: 5px solid #D4AF37;
+        padding: 15px;
+        border-radius: 8px;
+        color: white;
+    }
+    .stButton>button {
+        border-radius: 6px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Initialize database
+init_db()
+
+# Load menu dataset
+menu_df = load_menu_list()
+
+# Sidebar Navigation & Branding
+st.sidebar.markdown("# ✂️ **NYRA UNISEX SALON**")
+st.sidebar.caption("Daily Entry, Earnings & Service Management")
+st.sidebar.markdown("---")
+
+nav_choice = st.sidebar.radio(
+    "Navigation Menu",
+    [
+        "📝 Daily Entry (Log Services)",
+        "📊 Earnings & Work Done",
+        "📋 Menu Catalog & Pricing",
+        "📦 Salon Inventory",
+        "☁️ Google Drive & Excel Sync"
+    ]
+)
+
+st.sidebar.markdown("---")
+st.sidebar.markdown(f"[🔗 Open Google Drive Excel Sheet]({GOOGLE_DRIVE_VIEW_URL})")
+
+# Download formatted Excel button in sidebar
+excel_data = generate_excel_export()
+st.sidebar.download_button(
+    label="📥 Download Full Salon Excel (.xlsx)",
+    data=excel_data,
+    file_name=f"NYRA_Salon_Ledger_{datetime.now().strftime('%Y%m%d')}.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    use_container_width=True
+)
+
+# Header Section
+st.markdown("<div class='main-header'>NYRA UNISEX SALON</div>", unsafe_allow_html=True)
+st.markdown("<div class='sub-header'>Daily Service Tracker • Earnings & Work Ledger • Price & Margin Catalog</div>", unsafe_allow_html=True)
+
+
+# ==============================================================================
+# TAB 1: DAILY ENTRY
+# ==============================================================================
+if nav_choice == "📝 Daily Entry (Log Services)":
+    st.subheader("📝 Record Daily Work Done & Money Received")
+    
+    # Session state for items cart in current ticket
+    if 'cart_items' not in st.session_state:
+        st.session_state.cart_items = []
+
+    col_left, col_right = st.columns([1, 1], gap="large")
+    
+    with col_left:
+        st.markdown("### 1. Select Date & Payment Info")
+        entry_date = st.date_input("Transaction Date", value=date.today())
+        payment_mode = st.selectbox("Payment Mode", ["UPI", "Cash", "Online", "Card", "Mixed"])
+        
+        st.markdown("### 2. Add Services Performed")
+        
+        categories = sorted(menu_df['Category'].unique().tolist())
+        selected_category = st.selectbox("Service Category", categories)
+        
+        cat_services = menu_df[menu_df['Category'] == selected_category]
+        
+        # Format service dropdown list with Variant and Price
+        service_options = []
+        for idx, row in cat_services.iterrows():
+            variant_str = f" ({row['Variant']})" if pd.notnull(row['Variant']) and str(row['Variant']).strip() != '' else ""
+            label = f"{row['Service']}{variant_str} - ₹{int(row['Selling Price (Rs.)'])}"
+            service_options.append((label, row))
+            
+        selected_service_label = st.selectbox("Select Service", [opt[0] for opt in service_options])
+        selected_service_row = [opt[1] for opt in service_options if opt[0] == selected_service_label][0]
+        
+        qty = st.number_input("Quantity", min_value=1, max_value=20, value=1)
+        
+        if st.button("➕ Add Service to Entry", use_container_width=True):
+            item_name = selected_service_row['Service']
+            variant = selected_service_row['Variant']
+            price = selected_service_row['Selling Price (Rs.)']
+            
+            full_item_desc = f"{item_name}{' (' + str(variant) + ')' if variant else ''}"
+            
+            st.session_state.cart_items.append({
+                'category': selected_category,
+                'item_desc': full_item_desc,
+                'price': price,
+                'qty': qty,
+                'subtotal': price * qty
+            })
+            st.success(f"Added {full_item_desc} (x{qty}) to ticket!")
+
+    with col_right:
+        st.markdown("### 3. Service Ticket Summary")
+        
+        if len(st.session_state.cart_items) > 0:
+            cart_df = pd.DataFrame(st.session_state.cart_items)
+            st.dataframe(
+                cart_df[['item_desc', 'qty', 'price', 'subtotal']].rename(
+                    columns={'item_desc': 'Service', 'qty': 'Qty', 'price': 'Unit Price (₹)', 'subtotal': 'Subtotal (₹)'}
+                ),
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            calculated_total = float(cart_df['subtotal'].sum())
+            items_str = ", ".join([f"{item['item_desc']} x{item['qty']}" for item in st.session_state.cart_items])
+            
+            col_clear, col_space = st.columns([1, 2])
+            with col_clear:
+                if st.button("🗑️ Clear Ticket Items"):
+                    st.session_state.cart_items = []
+                    st.rerun()
+        else:
+            calculated_total = 0.0
+            items_str = ""
+            st.info("No menu items added yet. You can pick services on the left or enter custom work below.")
+            custom_items = st.text_area("Custom Work / Items Description", placeholder="e.g. Threading, Hair Cut, Facial")
+            if custom_items.strip():
+                items_str = custom_items.strip()
+                
+        final_money_received = st.number_input("Money Received (₹)", value=calculated_total, step=10.0)
+        
+        st.markdown("---")
+        if st.button("✅ Save Daily Entry & Log Earnings", type="primary", use_container_width=True):
+            if final_money_received <= 0:
+                st.warning("Please enter a valid Money Received amount.")
+            else:
+                add_earning_entry(
+                    date_str=entry_date.strftime('%Y-%m-%d'),
+                    items_str=items_str,
+                    money_received=final_money_received,
+                    payment_mode=payment_mode
+                )
+                st.session_state.cart_items = []
+                st.balloons()
+                st.success(f"Successfully logged ₹{final_money_received:.2f} ({payment_mode}) for {entry_date.strftime('%d-%b-%Y')}!")
+
+
+# ==============================================================================
+# TAB 2: EARNINGS & WORK DONE DASHBOARD
+# ==============================================================================
+elif nav_choice == "📊 Earnings & Work Done":
+    st.subheader("📊 Work Done & Earnings Analytics")
+    
+    df_earnings = get_earnings_df()
+    
+    if df_earnings.empty:
+        st.info("No earnings entries recorded yet.")
+    else:
+        # Date Filter
+        df_earnings['Date_Parsed'] = pd.to_datetime(df_earnings['Date'], errors='coerce')
+        min_date = df_earnings['Date_Parsed'].min().date() if pd.notnull(df_earnings['Date_Parsed'].min()) else date.today()
+        max_date = df_earnings['Date_Parsed'].max().date() if pd.notnull(df_earnings['Date_Parsed'].max()) else date.today()
+        
+        st.markdown("#### Filter Date Range")
+        c1, c2, c3 = st.columns([1, 1, 1])
+        with c1:
+            start_d = st.date_input("Start Date", value=min_date)
+        with c2:
+            end_d = st.date_input("End Date", value=max_date)
+        with c3:
+            mode_filter = st.multiselect("Payment Mode", options=df_earnings['Payment Mode'].unique().tolist(), default=df_earnings['Payment Mode'].unique().tolist())
+            
+        filtered_df = df_earnings[
+            (df_earnings['Date_Parsed'].dt.date >= start_d) &
+            (df_earnings['Date_Parsed'].dt.date <= end_d) &
+            (df_earnings['Payment Mode'].isin(mode_filter))
+        ].copy()
+        
+        st.markdown("---")
+        
+        # KPI Summary Cards
+        total_rev = filtered_df['Money Received'].sum()
+        total_count = len(filtered_df)
+        avg_ticket = total_rev / total_count if total_count > 0 else 0
+        
+        upi_rev = filtered_df[filtered_df['Payment Mode'] == 'UPI']['Money Received'].sum()
+        cash_rev = filtered_df[filtered_df['Payment Mode'] == 'Cash']['Money Received'].sum()
+        online_rev = filtered_df[filtered_df['Payment Mode'].isin(['Online', 'Card', 'Mixed'])]['Money Received'].sum()
+        
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Total Revenue", f"₹{total_rev:,.0f}")
+        m2.metric("UPI Earnings", f"₹{upi_rev:,.0f}")
+        m3.metric("Cash Earnings", f"₹{cash_rev:,.0f}")
+        m4.metric("Online/Other", f"₹{online_rev:,.0f}")
+        m5.metric("Avg Ticket", f"₹{avg_ticket:,.0f}")
+        
+        st.markdown("---")
+        
+        # Charts Section
+        chart_col1, chart_col2 = st.columns(2)
+        
+        with chart_col1:
+            st.markdown("##### Daily Earnings Trend")
+            daily_grp = filtered_df.groupby('Date')['Money Received'].sum().reset_index()
+            daily_grp = daily_grp.sort_values('Date')
+            
+            fig_line = px.line(
+                daily_grp,
+                x='Date',
+                y='Money Received',
+                markers=True,
+                line_shape='spline',
+                title="Revenue Over Time (₹)"
+            )
+            fig_line.update_traces(line_color="#D4AF37", marker=dict(size=8, color="#D4AF37"))
+            fig_line.update_layout(xaxis_title="Date", yaxis_title="Money Received (₹)", template="plotly_dark")
+            st.plotly_chart(fig_line, use_container_width=True)
+            
+        with chart_col2:
+            st.markdown("##### Revenue Breakdown by Payment Mode")
+            mode_grp = filtered_df.groupby('Payment Mode')['Money Received'].sum().reset_index()
+            
+            fig_pie = px.pie(
+                mode_grp,
+                names='Payment Mode',
+                values='Money Received',
+                hole=0.4,
+                title="Payment Method Share",
+                color_discrete_sequence=px.colors.qualitative.Gold
+            )
+            fig_pie.update_layout(template="plotly_dark")
+            st.plotly_chart(fig_pie, use_container_width=True)
+            
+        # Detailed Records Table
+        st.markdown("---")
+        st.markdown("### 📜 Detailed Work & Earnings Ledger")
+        
+        st.dataframe(
+            filtered_df[['S.No', 'Date', 'Items', 'Money Received', 'Payment Mode', 'Created At']],
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # Delete entry tool
+        with st.expander("🗑️ Manage / Delete an Entry"):
+            del_id = st.number_input("Enter ID of entry to delete", min_value=1, step=1)
+            if st.button("Delete Entry"):
+                delete_earning_entry(del_id)
+                st.success(f"Entry #{del_id} deleted successfully.")
+                st.rerun()
+
+
+# ==============================================================================
+# TAB 3: MENU CATALOG & PRICING
+# ==============================================================================
+elif nav_choice == "📋 Menu Catalog & Pricing":
+    st.subheader("📋 NYRA Unisex Salon Menu List & Margin Calculator")
+    
+    col_f1, col_f2 = st.columns([2, 1])
+    with col_f1:
+        search_query = st.text_input("🔍 Search Service / Category / Note", "")
+    with col_f2:
+        selected_cats = st.multiselect("Filter by Category", options=sorted(menu_df['Category'].unique().tolist()))
+        
+    filtered_menu = menu_df.copy()
+    if selected_cats:
+        filtered_menu = filtered_menu[filtered_menu['Category'].isin(selected_cats)]
+    if search_query.strip():
+        q = search_query.lower()
+        filtered_menu = filtered_menu[
+            filtered_menu['Service'].str.lower().str.contains(q, na=False) |
+            filtered_menu['Category'].str.lower().str.contains(q, na=False) |
+            filtered_menu['Notes'].str.lower().str.contains(q, na=False)
+        ]
+        
+    st.markdown(f"**Showing {len(filtered_menu)} services**")
+    
+    # Format Table Display
+    display_df = filtered_menu[['Category', 'Service', 'Variant', 'Selling Price (Rs.)', 'Cost per Service (Rs.)', 'Profit (Rs.)', 'Margin %', 'Notes']].copy()
+    display_df['Margin %'] = (display_df['Margin %'] * 100).round(1).astype(str) + '%'
+    
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True
+    )
+    
+    # Quick Quote / Bill Calculator Tool
+    st.markdown("---")
+    st.markdown("### 🧮 Quick Price Estimator / Quote Builder")
+    calc_services = st.multiselect(
+        "Select services to build quote",
+        options=menu_df['Category'] + " - " + menu_df['Service'] + " (" + menu_df['Variant'].astype(str) + ") [₹" + menu_df['Selling Price (Rs.)'].astype(str) + "]"
+    )
+    
+    if calc_services:
+        total_quote = 0.0
+        total_cost = 0.0
+        quote_rows = []
+        for s_label in calc_services:
+            # find matching row
+            for idx, row in menu_df.iterrows():
+                label = f"{row['Category']} - {row['Service']} ({row['Variant']}) [₹{row['Selling Price (Rs.)']}]"
+                if label == s_label:
+                    total_quote += row['Selling Price (Rs.)']
+                    total_cost += row['Cost per Service (Rs.)']
+                    quote_rows.append({
+                        'Category': row['Category'],
+                        'Service': row['Service'],
+                        'Variant': row['Variant'],
+                        'Price (₹)': row['Selling Price (Rs.)'],
+                        'Est Cost (₹)': row['Cost per Service (Rs.)'],
+                        'Est Profit (₹)': row['Profit (Rs.)']
+                    })
+                    break
+        q_df = pd.DataFrame(quote_rows)
+        st.table(q_df)
+        st.markdown(f"#### **Total Quote Price: ₹{total_quote:,.2f}** (Estimated Profit: ₹{(total_quote - total_cost):,.2f})")
+
+
+# ==============================================================================
+# TAB 4: SALON INVENTORY
+# ==============================================================================
+elif nav_choice == "📦 Salon Inventory":
+    st.subheader("📦 Salon Inventory & Product Stock")
+    
+    inv_df = get_inventory_df()
+    
+    st.dataframe(inv_df, use_container_width=True, hide_index=True)
+    
+    st.markdown("---")
+    st.markdown("### ➕ Add New Inventory Item")
+    c1, c2 = st.columns(2)
+    with c1:
+        new_item = st.text_input("Item Name")
+    with c2:
+        new_qty = st.text_input("Quantity / Stock (e.g. 2 boxes, 5 bottles)")
+        
+    if st.button("Add Item to Stock"):
+        if new_item.strip():
+            add_inventory_item(new_item.strip(), new_qty.strip())
+            st.success(f"Added {new_item} to inventory!")
+            st.rerun()
+
+
+# ==============================================================================
+# TAB 5: GOOGLE DRIVE & DATA SYNC
+# ==============================================================================
+elif nav_choice == "☁️ Google Drive & Excel Sync":
+    st.subheader("☁️ Google Drive Spreadsheet Integration & Cloud Sync")
+    
+    st.markdown(f"""
+    This Streamlit application is linked directly to your **NYRA Unisex Salon** Google Drive Excel Spreadsheet:
+    
+    👉 **[Click Here to Open Excel Sheet in Google Drive]({GOOGLE_DRIVE_VIEW_URL})**
+    """)
+    
+    st.markdown("---")
+    st.markdown("### 🔄 Sync Options")
+    
+    col_sync1, col_sync2 = st.columns(2)
+    
+    with col_sync1:
+        st.markdown("#### 1. Fetch Latest Data from Google Drive")
+        st.caption("Pull live spreadsheet sheets from your Google Drive link into the app.")
+        if st.button("📥 Fetch Live Google Sheet Data", use_container_width=True):
+            with st.spinner("Downloading spreadsheet from Google Drive..."):
+                g_data = fetch_from_google_drive()
+                if g_data:
+                    st.success("Successfully fetched live Google Drive sheet!")
+                    for sheet_name, df_s in g_data.items():
+                        st.markdown(f"**Sheet: {sheet_name}** ({len(df_s)} rows)")
+                else:
+                    st.error("Failed to fetch live spreadsheet. Please ensure link permissions are set to 'Anyone with link can view'.")
+                    
+    with col_sync2:
+        st.markdown("#### 2. Export App Data to Excel Workbook")
+        st.caption("Generate a 5-sheet `.xlsx` file containing all Price Lists, Margins, Daily Entries, Category Summaries, and Inventory.")
+        st.download_button(
+            label="📤 Download Updated Salon Excel (.xlsx)",
+            data=excel_data,
+            file_name=f"NYRA_Salon_Export_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
