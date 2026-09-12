@@ -12,13 +12,13 @@ LOCAL_EXCEL_PATH = os.path.join(os.path.dirname(__file__), "nyra_data.xlsx")
 DB_PATH = os.path.join(os.path.dirname(__file__), "nyra_salon.db")
 
 def init_db():
-    """Initialize local SQLite database for earnings and custom menu/inventory tracking."""
+    """Initialize local SQLite database for daily entries and custom menu/inventory tracking."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Earnings table
+    # Daily entry table
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS earnings (
+        CREATE TABLE IF NOT EXISTS daily_entry (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             s_no INTEGER,
             date TEXT NOT NULL,
@@ -42,27 +42,31 @@ def init_db():
     conn.commit()
     
     # Seed database from excel if table is empty
-    cursor.execute("SELECT COUNT(*) FROM earnings")
+    cursor.execute("SELECT COUNT(*) FROM daily_entry")
     if cursor.fetchone()[0] == 0 and os.path.exists(LOCAL_EXCEL_PATH):
         try:
-            df = pd.read_excel(LOCAL_EXCEL_PATH, sheet_name='Earnings')
-            # Clean column names
-            df.columns = [c.strip() for c in df.columns]
-            for idx, row in df.iterrows():
-                if pd.notnull(row.get('Money Received')) or pd.notnull(row.get('Payment Mode')) or pd.notnull(row.get('Items')):
-                    date_val = str(row['Date']).split(' ')[0] if pd.notnull(row.get('Date')) else datetime.now().strftime('%Y-%m-%d')
-                    items_val = str(row['Items']) if pd.notnull(row.get('Items')) else ''
-                    money_val = float(row['Money Received']) if pd.notnull(row.get('Money Received')) else 0.0
-                    mode_val = str(row['Payment Mode']) if pd.notnull(row.get('Payment Mode')) else 'Cash'
-                    s_no_val = int(row['S.No']) if pd.notnull(row.get('S.No')) else (idx + 1)
-                    
-                    cursor.execute('''
-                        INSERT INTO earnings (s_no, date, items, money_received, payment_mode)
-                        VALUES (?, ?, ?, ?, ?)
-                    ''', (s_no_val, date_val, items_val, money_val, mode_val))
-            conn.commit()
+            # Check sheet name: 'Daily entry' or 'Earnings'
+            xls = pd.ExcelFile(LOCAL_EXCEL_PATH)
+            target_sheet = 'Daily entry' if 'Daily entry' in xls.sheet_names else ('Earnings' if 'Earnings' in xls.sheet_names else None)
+            
+            if target_sheet:
+                df = pd.read_excel(LOCAL_EXCEL_PATH, sheet_name=target_sheet)
+                df.columns = [c.strip() for c in df.columns]
+                for idx, row in df.iterrows():
+                    if pd.notnull(row.get('Money Received')) or pd.notnull(row.get('Payment Mode')) or pd.notnull(row.get('Items')):
+                        date_val = str(row['Date']).split(' ')[0] if pd.notnull(row.get('Date')) else datetime.now().strftime('%Y-%m-%d')
+                        items_val = str(row['Items']) if pd.notnull(row.get('Items')) else ''
+                        money_val = float(row['Money Received']) if pd.notnull(row.get('Money Received')) else 0.0
+                        mode_val = str(row['Payment Mode']) if pd.notnull(row.get('Payment Mode')) else 'Cash'
+                        s_no_val = int(row['S.No']) if pd.notnull(row.get('S.No')) else (idx + 1)
+                        
+                        cursor.execute('''
+                            INSERT INTO daily_entry (s_no, date, items, money_received, payment_mode)
+                            VALUES (?, ?, ?, ?, ?)
+                        ''', (s_no_val, date_val, items_val, money_val, mode_val))
+                conn.commit()
         except Exception as e:
-            print(f"Error seeding earnings: {e}")
+            print(f"Error seeding daily entry: {e}")
             
     cursor.execute("SELECT COUNT(*) FROM inventory")
     if cursor.fetchone()[0] == 0 and os.path.exists(LOCAL_EXCEL_PATH):
@@ -71,7 +75,6 @@ def init_db():
             col1 = df_inv.columns[0]
             col2 = df_inv.columns[1]
             
-            # Header item
             cursor.execute("INSERT INTO inventory (item_name, quantity) VALUES (?, ?)", (str(col1).strip(), str(col2).strip()))
             
             for idx, row in df_inv.iterrows():
@@ -90,11 +93,9 @@ def load_menu_list():
     if os.path.exists(LOCAL_EXCEL_PATH):
         df = pd.read_excel(LOCAL_EXCEL_PATH, sheet_name='Price List & Margins')
     else:
-        # Fallback fetch from Google Drive URL
         df_dict = fetch_from_google_drive()
         df = df_dict.get('Price List & Margins', pd.DataFrame())
     
-    # Fill NaN values for clean rendering
     if 'Variant' in df.columns:
         df['Variant'] = df['Variant'].fillna('')
     if 'Notes' in df.columns:
@@ -127,26 +128,25 @@ def fetch_from_google_drive():
         return {}
 
 def get_earnings_df():
-    """Get all daily earnings entries from SQLite database."""
+    """Get all daily entries from SQLite database."""
     init_db()
     conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("SELECT id, s_no as 'S.No', date as 'Date', items as 'Items', money_received as 'Money Received', payment_mode as 'Payment Mode', created_at as 'Created At' FROM earnings ORDER BY date DESC, id DESC", conn)
+    df = pd.read_sql_query("SELECT id, s_no as 'S.No', date as 'Date', items as 'Items', money_received as 'Money Received', payment_mode as 'Payment Mode', created_at as 'Created At' FROM daily_entry ORDER BY date DESC, id DESC", conn)
     conn.close()
     return df
 
 def add_earning_entry(date_str, items_str, money_received, payment_mode):
-    """Add a new service transaction / daily earning entry."""
+    """Add a new daily entry."""
     init_db()
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Calculate next S.No
-    cursor.execute("SELECT MAX(s_no) FROM earnings")
+    cursor.execute("SELECT MAX(s_no) FROM daily_entry")
     max_sno = cursor.fetchone()[0]
     next_sno = (max_sno + 1) if max_sno is not None else 1
     
     cursor.execute('''
-        INSERT INTO earnings (s_no, date, items, money_received, payment_mode)
+        INSERT INTO daily_entry (s_no, date, items, money_received, payment_mode)
         VALUES (?, ?, ?, ?, ?)
     ''', (next_sno, date_str, items_str, float(money_received), payment_mode))
     
@@ -157,7 +157,7 @@ def delete_earning_entry(entry_id):
     """Delete an entry by ID."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM earnings WHERE id = ?", (entry_id,))
+    cursor.execute("DELETE FROM daily_entry WHERE id = ?", (entry_id,))
     conn.commit()
     conn.close()
 
@@ -178,16 +178,8 @@ def add_inventory_item(item_name, quantity, notes=""):
     conn.commit()
     conn.close()
 
-def update_inventory_item(item_id, item_name, quantity, notes=""):
-    """Update existing inventory item."""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("UPDATE inventory SET item_name = ?, quantity = ?, notes = ? WHERE id = ?", (item_name, quantity, notes, item_id))
-    conn.commit()
-    conn.close()
-
 def generate_excel_export():
-    """Generate Excel file bytes matching the exact 5-sheet format of the salon workbook."""
+    """Generate Excel file bytes matching the exact format with 'Daily entry' sheet."""
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         # Sheet 1: Instructions
@@ -196,18 +188,18 @@ def generate_excel_export():
                 inst_df = pd.read_excel(LOCAL_EXCEL_PATH, sheet_name='Instructions')
                 inst_df.to_excel(writer, sheet_name='Instructions', index=False)
             except Exception:
-                pd.DataFrame({'Instructions': ['NYRA Unisex Salon Price List & Earnings Ledger']}).to_excel(writer, sheet_name='Instructions', index=False)
+                pd.DataFrame({'Instructions': ['NYRA Unisex Salon Price List & Daily Entry Ledger']}).to_excel(writer, sheet_name='Instructions', index=False)
         else:
-            pd.DataFrame({'Instructions': ['NYRA Unisex Salon Price List & Earnings Ledger']}).to_excel(writer, sheet_name='Instructions', index=False)
+            pd.DataFrame({'Instructions': ['NYRA Unisex Salon Price List & Daily Entry Ledger']}).to_excel(writer, sheet_name='Instructions', index=False)
             
         # Sheet 2: Price List & Margins
         menu_df = load_menu_list()
         menu_df.to_excel(writer, sheet_name='Price List & Margins', index=False)
         
-        # Sheet 3: Earnings
-        earnings_df = get_earnings_df()
-        export_earnings = earnings_df[['S.No', 'Date', 'Items', 'Money Received', 'Payment Mode']].copy()
-        export_earnings.to_excel(writer, sheet_name='Earnings', index=False)
+        # Sheet 3: Daily entry (Exact name requested)
+        daily_df = get_earnings_df()
+        export_daily = daily_df[['S.No', 'Date', 'Items', 'Money Received', 'Payment Mode']].copy()
+        export_daily.to_excel(writer, sheet_name='Daily entry', index=False)
         
         # Sheet 4: Category Summary
         cat_summary = menu_df.groupby('Category').agg(

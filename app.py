@@ -70,8 +70,8 @@ st.sidebar.markdown("---")
 nav_choice = st.sidebar.radio(
     "Navigation Menu",
     [
-        "📝 Daily Entry (Log Services)",
-        "📊 Earnings & Work Done",
+        "📝 Daily Entry",
+        "📊 Daily Entry Ledger & Analytics",
         "📋 Menu Catalog & Pricing",
         "📦 Salon Inventory",
         "☁️ Google Drive & Excel Sync"
@@ -86,21 +86,21 @@ excel_data = generate_excel_export()
 st.sidebar.download_button(
     label="📥 Download Full Salon Excel (.xlsx)",
     data=excel_data,
-    file_name=f"NYRA_Salon_Ledger_{datetime.now().strftime('%Y%m%d')}.xlsx",
+    file_name=f"NYRA_Salon_Daily_Entry_{datetime.now().strftime('%Y%m%d')}.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     use_container_width=True
 )
 
 # Header Section
 st.markdown("<div class='main-header'>NYRA UNISEX SALON</div>", unsafe_allow_html=True)
-st.markdown("<div class='sub-header'>Daily Service Tracker • Earnings & Work Ledger • Price & Margin Catalog</div>", unsafe_allow_html=True)
+st.markdown("<div class='sub-header'>Daily Entry • Service Tracker • Price & Margin Catalog</div>", unsafe_allow_html=True)
 
 
 # ==============================================================================
 # TAB 1: DAILY ENTRY
 # ==============================================================================
-if nav_choice == "📝 Daily Entry (Log Services)":
-    st.subheader("📝 Record Daily Work Done & Money Received")
+if nav_choice == "📝 Daily Entry":
+    st.subheader("📝 Record Service Work & Money Received in 'Daily Entry'")
     
     # Session state for items cart in current ticket
     if 'cart_items' not in st.session_state:
@@ -180,7 +180,7 @@ if nav_choice == "📝 Daily Entry (Log Services)":
         final_money_received = st.number_input("Money Received (₹)", value=calculated_total, step=10.0)
         
         st.markdown("---")
-        if st.button("✅ Save Daily Entry & Log Earnings", type="primary", use_container_width=True):
+        if st.button("✅ Save to 'Daily entry' Sheet", type="primary", use_container_width=True):
             if final_money_received <= 0:
                 st.warning("Please enter a valid Money Received amount.")
             else:
@@ -192,19 +192,19 @@ if nav_choice == "📝 Daily Entry (Log Services)":
                 )
                 st.session_state.cart_items = []
                 st.balloons()
-                st.success(f"Successfully logged ₹{final_money_received:.2f} ({payment_mode}) for {entry_date.strftime('%d-%b-%Y')}!")
+                st.success(f"Successfully saved entry into 'Daily entry' sheet: ₹{final_money_received:.2f} ({payment_mode}) for {entry_date.strftime('%d-%b-%Y')}!")
 
 
 # ==============================================================================
-# TAB 2: EARNINGS & WORK DONE DASHBOARD
+# TAB 2: DAILY ENTRY LEDGER & ANALYTICS
 # ==============================================================================
-elif nav_choice == "📊 Earnings & Work Done":
-    st.subheader("📊 Work Done & Earnings Analytics")
+elif nav_choice == "📊 Daily Entry Ledger & Analytics":
+    st.subheader("📊 'Daily entry' Sheet Records & Financial Analytics")
     
     df_earnings = get_earnings_df()
     
     if df_earnings.empty:
-        st.info("No earnings entries recorded yet.")
+        st.info("No daily entries recorded yet.")
     else:
         # Date Filter
         df_earnings['Date_Parsed'] = pd.to_datetime(df_earnings['Date'], errors='coerce')
@@ -250,7 +250,7 @@ elif nav_choice == "📊 Earnings & Work Done":
         chart_col1, chart_col2 = st.columns(2)
         
         with chart_col1:
-            st.markdown("##### Daily Earnings Trend")
+            st.markdown("##### Daily Revenue Trend")
             daily_grp = filtered_df.groupby('Date')['Money Received'].sum().reset_index()
             daily_grp = daily_grp.sort_values('Date')
             
@@ -260,7 +260,7 @@ elif nav_choice == "📊 Earnings & Work Done":
                 y='Money Received',
                 markers=True,
                 line_shape='spline',
-                title="Revenue Over Time (₹)"
+                title="Daily Revenue Trend (₹)"
             )
             fig_line.update_traces(line_color="#D4AF37", marker=dict(size=8, color="#D4AF37"))
             fig_line.update_layout(xaxis_title="Date", yaxis_title="Money Received (₹)", template="plotly_dark")
@@ -281,9 +281,9 @@ elif nav_choice == "📊 Earnings & Work Done":
             fig_pie.update_layout(template="plotly_dark")
             st.plotly_chart(fig_pie, use_container_width=True)
             
-        # Detailed Records Table
+        # Detailed Records Table (Exact layout of 'Daily entry' sheet)
         st.markdown("---")
-        st.markdown("### 📜 Detailed Work & Earnings Ledger")
+        st.markdown("### 📜 'Daily entry' Sheet Table")
         
         st.dataframe(
             filtered_df[['S.No', 'Date', 'Items', 'Money Received', 'Payment Mode', 'Created At']],
@@ -348,7 +348,6 @@ elif nav_choice == "📋 Menu Catalog & Pricing":
         total_cost = 0.0
         quote_rows = []
         for s_label in calc_services:
-            # find matching row
             for idx, row in menu_df.iterrows():
                 label = f"{row['Category']} - {row['Service']} ({row['Variant']}) [₹{row['Selling Price (Rs.)']}]"
                 if label == s_label:
@@ -411,7 +410,7 @@ elif nav_choice == "☁️ Google Drive & Excel Sync":
     col_sync1, col_sync2 = st.columns(2)
     
     with col_sync1:
-        st.markdown("#### 1. Fetch Latest Data from Google Drive")
+        st.markdown("#### 1. Fetch Live Data from Google Drive")
         st.caption("Pull live spreadsheet sheets from your Google Drive link into the app.")
         if st.button("📥 Fetch Live Google Sheet Data", use_container_width=True):
             with st.spinner("Downloading spreadsheet from Google Drive..."):
@@ -425,7 +424,7 @@ elif nav_choice == "☁️ Google Drive & Excel Sync":
                     
     with col_sync2:
         st.markdown("#### 2. Export App Data to Excel Workbook")
-        st.caption("Generate a 5-sheet `.xlsx` file containing all Price Lists, Margins, Daily Entries, Category Summaries, and Inventory.")
+        st.caption("Generate a 5-sheet `.xlsx` file containing all Price Lists, Margins, Daily Entry sheet, Category Summaries, and Inventory.")
         st.download_button(
             label="📤 Download Updated Salon Excel (.xlsx)",
             data=excel_data,
