@@ -12,7 +12,7 @@ LOCAL_EXCEL_PATH = os.path.join(os.path.dirname(__file__), "nyra_data.xlsx")
 DB_PATH = os.path.join(os.path.dirname(__file__), "nyra_salon.db")
 
 def init_db():
-    """Initialize local SQLite database with automatic column migration."""
+    """Initialize local SQLite database with flexible column mapping."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
@@ -75,24 +75,41 @@ def init_db():
                         
             if dfs_to_combine:
                 combined_df = pd.concat(dfs_to_combine, ignore_index=True)
-                combined_df.columns = [str(c).strip() for c in combined_df.columns]
+                # Flexible column matching
+                col_map = {str(c).strip().lower(): c for c in combined_df.columns}
                 
                 s_no_counter = 1
                 for idx, row in combined_df.iterrows():
-                    m_rec = row.get('Money Received') if pd.notnull(row.get('Money Received')) else row.get('Money Received (Rs.)')
-                    p_mode = row.get('Payment Mode')
-                    items_val = row.get('Items') if pd.notnull(row.get('Items')) else row.get('Services')
+                    # Flexible column lookup helper
+                    def get_val(possible_keys):
+                        for k in possible_keys:
+                            for c_lower, c_orig in col_map.items():
+                                if k.lower() in c_lower:
+                                    val = row[c_orig]
+                                    if pd.notnull(val):
+                                        return val
+                        return None
+
+                    m_rec = get_val(['money received', 'money', 'received', 'amount'])
+                    p_mode = get_val(['payment mode', 'mode', 'payment'])
+                    items_val = get_val(['items', 'services', 'work', 'service'])
                     
                     if pd.notnull(m_rec) or pd.notnull(p_mode) or pd.notnull(items_val):
-                        date_val = str(row['Date']).split(' ')[0] if pd.notnull(row.get('Date')) else datetime.now().strftime('%Y-%m-%d')
+                        raw_date = get_val(['date'])
+                        date_val = str(raw_date).split(' ')[0] if pd.notnull(raw_date) else datetime.now().strftime('%Y-%m-%d')
                         items_str = str(items_val) if pd.notnull(items_val) else ''
-                        cat_str = str(row.get('Category')) if pd.notnull(row.get('Category')) else ''
+                        raw_cat = get_val(['category'])
+                        cat_str = str(raw_cat) if pd.notnull(raw_cat) else ''
                         money_val = float(m_rec) if pd.notnull(m_rec) else 0.0
-                        cost_val = float(row.get('Cost (Rs.)')) if pd.notnull(row.get('Cost (Rs.)')) else 0.0
-                        profit_val = float(row.get('Profit (Rs.)')) if pd.notnull(row.get('Profit (Rs.)')) else (money_val - cost_val)
+                        raw_cost = get_val(['cost'])
+                        cost_val = float(raw_cost) if pd.notnull(raw_cost) else 0.0
+                        raw_profit = get_val(['profit'])
+                        profit_val = float(raw_profit) if pd.notnull(raw_profit) else (money_val - cost_val)
                         mode_val = str(p_mode) if pd.notnull(p_mode) else 'Cash'
-                        s_no_val = int(row['S.No']) if pd.notnull(row.get('S.No')) else s_no_counter
-                        notes_val = str(row.get('Notes')) if pd.notnull(row.get('Notes')) else ''
+                        raw_sno = get_val(['s.no', 'sno', 'sl', 'id'])
+                        s_no_val = int(raw_sno) if pd.notnull(raw_sno) and str(raw_sno).isdigit() else s_no_counter
+                        raw_notes = get_val(['notes', 'remark', 'customer'])
+                        notes_val = str(raw_notes) if pd.notnull(raw_notes) else ''
                         
                         cursor.execute('''
                             INSERT INTO daily_entry (s_no, date, items, category, money_received, cost, profit, payment_mode, notes)
@@ -145,7 +162,7 @@ def load_menu_list():
     return df
 
 def fetch_from_google_drive():
-    """Fetch live data from Google Drive link export and automatically fallback 'Daily Entry' if 0 rows."""
+    """Fetch live data from Google Drive link export and fallback empty sheets."""
     try:
         res = requests.get(GOOGLE_DRIVE_EXPORT_URL, timeout=10)
         if res.status_code == 200:
@@ -155,13 +172,11 @@ def fetch_from_google_drive():
             for sheet in xls.sheet_names:
                 data_dict[sheet] = pd.read_excel(bytes_data, sheet_name=sheet)
                 
-            # If 'Daily Entry' or 'Daily entry' is empty (0 rows), fallback to 'Earnings' sheet data!
             for entry_name in ['Daily Entry', 'Daily entry']:
                 if entry_name in data_dict:
                     if data_dict[entry_name].empty and 'Earnings' in data_dict and not data_dict['Earnings'].empty:
                         data_dict[entry_name] = data_dict['Earnings'].copy()
                         
-            # Ensure 'Daily Entry' exists in data_dict
             if 'Daily Entry' not in data_dict and 'Earnings' in data_dict:
                 data_dict['Daily Entry'] = data_dict['Earnings'].copy()
                 
@@ -207,7 +222,6 @@ def add_earning_entry(date_str, items_str, money_received, payment_mode, categor
     conn.commit()
     conn.close()
     
-    # Optional Webhook push to Google Sheet
     if webhook_url and webhook_url.strip():
         try:
             payload = {
