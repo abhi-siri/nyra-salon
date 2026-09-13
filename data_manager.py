@@ -3,10 +3,19 @@ import sqlite3
 import pandas as pd
 import requests
 import io
+import json
 from datetime import datetime
 
-GOOGLE_DRIVE_VIEW_URL = "https://docs.google.com/spreadsheets/d/1xqPkIAPaeEmvwvSOA6MqE9hTaMECtGUC/edit?usp=sharing"
-GOOGLE_DRIVE_EXPORT_URL = "https://docs.google.com/spreadsheets/d/1xqPkIAPaeEmvwvSOA6MqE9hTaMECtGUC/export?format=xlsx"
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    GSPREAD_AVAILABLE = True
+except ImportError:
+    GSPREAD_AVAILABLE = False
+
+NEW_SPREADSHEET_ID = "10ZEp7mTd3lhSk2qs5eeEVYqhDMkm9s4S"
+GOOGLE_DRIVE_VIEW_URL = f"https://docs.google.com/spreadsheets/d/{NEW_SPREADSHEET_ID}/edit?usp=sharing"
+GOOGLE_DRIVE_EXPORT_URL = f"https://docs.google.com/spreadsheets/d/{NEW_SPREADSHEET_ID}/export?format=xlsx"
 
 LOCAL_EXCEL_PATH = os.path.join(os.path.dirname(__file__), "nyra_data.xlsx")
 DB_PATH = os.path.join(os.path.dirname(__file__), "nyra_salon.db")
@@ -16,7 +25,6 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Daily entry table with full rich columns
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS daily_entry (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,7 +41,6 @@ def init_db():
         )
     ''')
     
-    # Auto-migrate table columns if older schema exists
     cursor.execute("PRAGMA table_info(daily_entry)")
     existing_cols = [col[1] for col in cursor.fetchall()]
     
@@ -49,7 +56,6 @@ def init_db():
             except Exception as e:
                 print(f"Column migration warning for {new_col}: {e}")
                 
-    # Inventory table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,13 +67,12 @@ def init_db():
     
     conn.commit()
     
-    # Seed database from excel if table is empty
     cursor.execute("SELECT COUNT(*) FROM daily_entry")
     if cursor.fetchone()[0] == 0 and os.path.exists(LOCAL_EXCEL_PATH):
         try:
             xls = pd.ExcelFile(LOCAL_EXCEL_PATH)
             dfs_to_combine = []
-            for sname in ['Earnings', 'Daily Entry', 'Daily entry']:
+            for sname in ['Sheet1', 'Earnings', 'Daily Entry', 'Daily entry']:
                 if sname in xls.sheet_names:
                     d = pd.read_excel(LOCAL_EXCEL_PATH, sheet_name=sname)
                     if not d.empty:
@@ -75,12 +80,10 @@ def init_db():
                         
             if dfs_to_combine:
                 combined_df = pd.concat(dfs_to_combine, ignore_index=True)
-                # Flexible column matching
                 col_map = {str(c).strip().lower(): c for c in combined_df.columns}
                 
                 s_no_counter = 1
                 for idx, row in combined_df.iterrows():
-                    # Flexible column lookup helper
                     def get_val(possible_keys):
                         for k in possible_keys:
                             for c_lower, c_orig in col_map.items():
@@ -162,7 +165,7 @@ def load_menu_list():
     return df
 
 def fetch_from_google_drive():
-    """Fetch live data from Google Drive link export and fallback empty sheets."""
+    """Fetch live data from the new Google Drive spreadsheet ID."""
     try:
         res = requests.get(GOOGLE_DRIVE_EXPORT_URL, timeout=10)
         if res.status_code == 200:
@@ -171,14 +174,6 @@ def fetch_from_google_drive():
             data_dict = {}
             for sheet in xls.sheet_names:
                 data_dict[sheet] = pd.read_excel(bytes_data, sheet_name=sheet)
-                
-            for entry_name in ['Daily Entry', 'Daily entry']:
-                if entry_name in data_dict:
-                    if data_dict[entry_name].empty and 'Earnings' in data_dict and not data_dict['Earnings'].empty:
-                        data_dict[entry_name] = data_dict['Earnings'].copy()
-                        
-            if 'Daily Entry' not in data_dict and 'Earnings' in data_dict:
-                data_dict['Daily Entry'] = data_dict['Earnings'].copy()
                 
             return data_dict
         else:
@@ -201,8 +196,30 @@ def get_earnings_df():
     conn.close()
     return df
 
-def add_earning_entry(date_str, items_str, money_received, payment_mode, category="", cost=0.0, profit=0.0, notes="", webhook_url=None):
-    """Add a new daily entry into SQLite database and optional Google Sheet webhook."""
+def append_to_google_sheet_api(s_no, date_str, items_str, category, money_received, cost, profit, payment_mode, notes, credentials_dict=None):
+    """Append row directly to live Google Sheet via gspread Google Sheets API."""
+    if not GSPREAD_AVAILABLE:
+        return False, "gspread library not installed."
+        
+    try:
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        if credentials_dict:
+            creds = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
+            client = gspread.authorize(creds)
+            sheet = client.open_by_key(NEW_SPREADSHEET_ID).sheet1
+            row_data = [s_no, date_str, items_str, category, money_received, cost, profit, payment_mode, notes]
+            sheet.append_row(row_data)
+            return True, "Successfully appended row to Google Sheet via Google Sheets API!"
+        else:
+            return False, "Google Service Account credentials not provided."
+    except Exception as e:
+        return False, f"Google Sheets API Error: {str(e)}"
+
+def add_earning_entry(date_str, items_str, money_received, payment_mode, category="", cost=0.0, profit=0.0, notes="", webhook_url=None, service_account_json=None):
+    """Add a new daily entry into SQLite database and optional Google Sheet API / Webhook."""
     init_db()
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -222,6 +239,14 @@ def add_earning_entry(date_str, items_str, money_received, payment_mode, categor
     conn.commit()
     conn.close()
     
+    # Send entry to Google Sheets API if service account credentials provided
+    if service_account_json:
+        try:
+            append_to_google_sheet_api(next_sno, date_str, items_str, category, float(money_received), float(cost), float(profit), payment_mode, notes, service_account_json)
+        except Exception as ex:
+            print(f"Google Sheets API push error: {ex}")
+            
+    # Send entry to Google Sheet Webhook if URL provided
     if webhook_url and webhook_url.strip():
         try:
             payload = {
@@ -285,7 +310,7 @@ def generate_excel_export():
         # Sheet 3: Daily Entry (Full Rich Columns)
         daily_df = get_earnings_df()
         export_daily = daily_df[['S.No', 'Date', 'Items/Services', 'Category', 'Money Received (Rs.)', 'Cost (Rs.)', 'Profit (Rs.)', 'Payment Mode', 'Notes']].copy()
-        export_daily.columns = ['S.No', 'Date', 'Items', 'Category', 'Money Received', 'Cost', 'Profit', 'Payment Mode', 'Notes']
+        export_daily.columns = ['S.No.', 'Date', 'Items', 'Category', 'Money Received', 'Cost', 'Profit', 'Payment Mode', 'Notes']
         export_daily.to_excel(writer, sheet_name='Daily Entry', index=False)
         
         # Sheet 4: Category Summary

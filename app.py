@@ -3,10 +3,12 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, date
+import json
 import os
 
 from data_manager import (
     GOOGLE_DRIVE_VIEW_URL,
+    NEW_SPREADSHEET_ID,
     load_menu_list,
     get_earnings_df,
     add_earning_entry,
@@ -67,12 +69,12 @@ nav_choice = st.sidebar.radio(
         "📊 Daily Entry Ledger & Analytics",
         "📋 Menu Catalog & Pricing",
         "📦 Salon Inventory",
-        "☁️ Google Drive & Excel Sync"
+        "☁️ Google Drive & API Sync"
     ]
 )
 
 st.sidebar.markdown("---")
-st.sidebar.markdown(f"[🔗 Open Google Drive Excel Sheet]({GOOGLE_DRIVE_VIEW_URL})")
+st.sidebar.markdown(f"[🔗 Open Google Sheet in Drive]({GOOGLE_DRIVE_VIEW_URL})")
 
 # Download formatted Excel button in sidebar
 excel_data = generate_excel_export()
@@ -93,7 +95,7 @@ st.markdown("<div class='sub-header'>Daily Entry • Service Tracker • Price &
 # TAB 1: DAILY ENTRY
 # ==============================================================================
 if nav_choice == "📝 Daily Entry":
-    st.subheader("📝 Record Service Work & Money Received in 'Daily Entry' Sheet")
+    st.subheader("📝 Record Service Work & Money Received in 'Daily Entry'")
     
     if 'cart_items' not in st.session_state:
         st.session_state.cart_items = []
@@ -181,11 +183,21 @@ if nav_choice == "📝 Daily Entry":
         entry_notes = st.text_input("Customer Name / Notes (Optional)", placeholder="e.g. Client Name, Discount info")
         
         st.markdown("---")
-        if st.button("✅ Save to 'Daily Entry' Sheet", type="primary", use_container_width=True):
+        if st.button("✅ Save Entry", type="primary", use_container_width=True):
             if final_money_received <= 0:
                 st.warning("Please enter a valid Money Received amount.")
             else:
                 profit_calc = final_money_received - calculated_cost
+                
+                # Check for Google Sheets API secrets or session credentials
+                sa_creds = None
+                if "gcp_service_account" in st.secrets:
+                    sa_creds = dict(st.secrets["gcp_service_account"])
+                elif "sa_credentials_json" in st.session_state:
+                    sa_creds = st.session_state["sa_credentials_json"]
+                    
+                webhook_url = st.secrets.get("GOOGLE_SHEET_WEBHOOK", None)
+                
                 add_earning_entry(
                     date_str=entry_date.strftime('%Y-%m-%d'),
                     items_str=items_str,
@@ -194,11 +206,13 @@ if nav_choice == "📝 Daily Entry":
                     category=cats_str,
                     cost=calculated_cost,
                     profit=profit_calc,
-                    notes=entry_notes
+                    notes=entry_notes,
+                    webhook_url=webhook_url,
+                    service_account_json=sa_creds
                 )
                 st.session_state.cart_items = []
                 st.balloons()
-                st.success(f"Successfully saved entry into 'Daily Entry' sheet: ₹{final_money_received:.2f} ({payment_mode}) for {entry_date.strftime('%d-%b-%Y')}!")
+                st.success(f"Successfully saved entry for {entry_date.strftime('%d-%b-%Y')}!")
 
 
 # ==============================================================================
@@ -233,7 +247,6 @@ elif nav_choice == "📊 Daily Entry Ledger & Analytics":
         
         st.markdown("---")
         
-        # KPI Summary Cards
         total_rev = filtered_df['Money Received (Rs.)'].sum()
         total_count = len(filtered_df)
         avg_ticket = total_rev / total_count if total_count > 0 else 0
@@ -287,7 +300,7 @@ elif nav_choice == "📊 Daily Entry Ledger & Analytics":
             st.plotly_chart(fig_pie, use_container_width=True)
             
         st.markdown("---")
-        st.markdown(f"### 📜 'Daily Entry' Sheet Table ({len(filtered_df)} Rows)")
+        st.markdown(f"### 📜 'Daily Entry' Table ({len(filtered_df)} Rows)")
         
         disp_cols = ['S.No', 'Date', 'Items/Services', 'Category', 'Money Received (Rs.)', 'Cost (Rs.)', 'Profit (Rs.)', 'Payment Mode', 'Notes', 'Created At']
         st.dataframe(
@@ -395,25 +408,45 @@ elif nav_choice == "📦 Salon Inventory":
 
 
 # ==============================================================================
-# TAB 5: GOOGLE DRIVE & DATA SYNC
+# TAB 5: GOOGLE DRIVE & API SYNC
 # ==============================================================================
-elif nav_choice == "☁️ Google Drive & Excel Sync":
-    st.subheader("☁️ Google Drive Spreadsheet Integration & Cloud Sync")
+elif nav_choice == "☁️ Google Drive & API Sync":
+    st.subheader("☁️ Google Drive Spreadsheet & Google Sheets API Integration")
     
     st.markdown(f"""
-    This Streamlit application is linked directly to your **NYRA Unisex Salon** Google Drive Excel Spreadsheet:
-    
-    👉 **[Click Here to Open Excel Sheet in Google Drive]({GOOGLE_DRIVE_VIEW_URL})**
+    Target Google Spreadsheet ID: `{NEW_SPREADSHEET_ID}`  
+    👉 **[Click Here to Open Google Sheet in Drive]({GOOGLE_DRIVE_VIEW_URL})**
     """)
     
     st.markdown("---")
-    st.markdown("### 🔄 Sync & Cloud Transfer Options")
+    
+    # API Integration Configuration Box
+    with st.expander("🔑 Setup Live 2-Way Google Sheets API (Automated Write)"):
+        st.markdown("""
+        To enable automatic real-time writing directly into your Google Sheet when entries are saved:
+        
+        #### Option A: Google Cloud Service Account (gspread)
+        1. Share your Google Sheet (`10ZEp7mTd3lhSk2qs5eeEVYqhDMkm9s4S`) with your Google Service Account email as **Editor**.
+        2. Paste your Service Account JSON credentials below or add it to Streamlit Secrets (`st.secrets["gcp_service_account"]`).
+        """)
+        
+        sa_json_input = st.text_area("Paste Service Account JSON Credentials", placeholder='{"type": "service_account", ...}')
+        if st.button("Save Service Account Key"):
+            try:
+                parsed_json = json.loads(sa_json_input.strip())
+                st.session_state["sa_credentials_json"] = parsed_json
+                st.success("Google Service Account credentials saved for this session!")
+            except Exception as e:
+                st.error(f"Invalid JSON format: {e}")
+
+    st.markdown("---")
+    st.markdown("### 🔄 Fetch & Download Sync Options")
     
     col_sync1, col_sync2 = st.columns(2)
     
     with col_sync1:
         st.markdown("#### 1. Fetch Data from Google Drive Link")
-        st.caption("Inspect live sheets from your Google Drive link.")
+        st.caption("Inspect live sheets from your Google Sheet link.")
         if st.button("📥 Fetch Google Drive Sheet Data", use_container_width=True):
             with st.spinner("Downloading spreadsheet from Google Drive..."):
                 g_data = fetch_from_google_drive()
@@ -425,8 +458,8 @@ elif nav_choice == "☁️ Google Drive & Excel Sync":
                     st.error("Failed to fetch live spreadsheet. Please ensure link permissions are set to 'Anyone with link can view'.")
                     
     with col_sync2:
-        st.markdown("#### 2. Update Google Drive Excel File")
-        st.caption("Download the updated 5-sheet workbook containing all your Daily Entry records and upload it to Google Drive.")
+        st.markdown("#### 2. Download Updated Excel Workbook")
+        st.caption("Download the complete 5-sheet `.xlsx` file containing all your Daily Entry logs and import it into Google Drive.")
         st.download_button(
             label="📤 Download Updated Salon Excel (.xlsx)",
             data=excel_data,
@@ -434,4 +467,3 @@ elif nav_choice == "☁️ Google Drive & Excel Sync":
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
-        st.info("💡 To update your Google Drive file: Download this file, open your Google Drive spreadsheet link above, click **File > Import > Upload**, and choose **Replace spreadsheet**.")
